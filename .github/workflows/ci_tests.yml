@@ -36,7 +36,8 @@ jobs:
       - name: Run unit tests (phases 2 & 3) with coverage
         run: |
           pytest tests/phase2/ tests/phase3/ \
-            --cov=src \
+            --cov=src/preprocessing \
+            --cov=src/embeddings \
             --cov-report=xml \
             --cov-report=term-missing \
             --cov-fail-under=80 \

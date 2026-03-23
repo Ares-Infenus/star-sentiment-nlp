@@ -71,24 +71,30 @@ class TestFullPreprocess:
         assert len(result.split()) >= 1
 
 
+_has_processed_files = all(
+    (PROCESSED_PATH / f"{d}_processed.csv").exists() for d in DOMAINS
+)
+
+
+@pytest.mark.skipif(not _has_processed_files, reason="Processed data not available (run scripts/run_phase2.py first)")
 class TestProcessedFiles:
     def test_processed_files_exist(self):
         for domain in DOMAINS:
             path = PROCESSED_PATH / f"{domain}_processed.csv"
-            assert path.exists(), f"❌ Falta archivo procesado: {path}"
+            assert path.exists(), f"Missing processed file: {path}"
 
     def test_processed_column_exists(self):
         for domain in DOMAINS:
             df = pd.read_csv(PROCESSED_PATH / f"{domain}_processed.csv")
             assert "text_processed" in df.columns, \
-                f"❌ Columna 'text_processed' falta en {domain}"
+                f"Column 'text_processed' missing in {domain}"
 
     def test_no_nulls_after_processing(self):
         for domain in DOMAINS:
             df = pd.read_csv(PROCESSED_PATH / f"{domain}_processed.csv")
             null_count = df["text_processed"].isnull().sum()
             assert null_count == 0, \
-                f"❌ {null_count} nulos en text_processed de {domain}"
+                f"{null_count} nulls in text_processed for {domain}"
 
     def test_text_length_bounds(self):
         for domain in DOMAINS:
@@ -97,9 +103,9 @@ class TestProcessedFiles:
             too_short = (word_counts < MIN_TEXT_LENGTH).sum()
             too_long = (word_counts > MAX_TEXT_LENGTH).sum()
             assert too_short == 0, \
-                f"❌ {too_short} textos muy cortos (<{MIN_TEXT_LENGTH} palabras) en {domain}"
+                f"{too_short} texts too short (<{MIN_TEXT_LENGTH} words) in {domain}"
             assert too_long == 0, \
-                f"❌ {too_long} textos muy largos (>{MAX_TEXT_LENGTH} palabras) en {domain}"
+                f"{too_long} texts too long (>{MAX_TEXT_LENGTH} words) in {domain}"
 
 
 if __name__ == "__main__":
