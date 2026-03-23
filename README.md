@@ -26,6 +26,8 @@ An end-to-end NLP pipeline that classifies text from **three distinct domains** 
 - [Reproducing the Experiment](#-reproducing-the-experiment)
 - [Testing](#-testing)
 - [Interactive Demo](#-interactive-demo)
+- [Improvement Roadmap](#-improvement-roadmap)
+- [References](#-references)
 
 ---
 
@@ -413,6 +415,105 @@ python scripts/run_phase5.py
 ```
 
 Opens at `http://localhost:7860`. Select a model, type or paste any text, and get an instant sentiment prediction with confidence score.
+
+---
+
+## Improvement Roadmap
+
+### Context: Where Do We Stand?
+
+The current results (62.5% accuracy, 0.607 F1 with DistilBERT on 5 classes) are **consistent with published benchmarks** for fine-grained sentiment classification. For reference, RoBERTa-Large achieves ~60.2% on SST-5 [[1]](#references), and BERT-Base reaches ~54-55% [[1]](#references). Classifying into 5 granular levels is fundamentally harder than binary sentiment -- the literature documents a 20-30 point accuracy gap between 5-class and binary setups, with inter-annotator agreement dropping significantly for middle classes [[1, 6]](#references).
+
+The multi-domain nature of this project adds further complexity: models trained on one domain (e.g., product reviews) can lose 10-20 points when applied to another (e.g., financial headlines) without domain adaptation [[3, 6]](#references).
+
+### Prioritized Improvements
+
+The table below summarizes improvements ordered by expected return on investment, grounded in recent literature:
+
+| Improvement | Expected Gain | Cost | Difficulty | Priority |
+|:---|:---:|:---:|:---:|:---:|
+| Early stopping + more epochs (6-8) | +2-4 pp | Low | Very low | High |
+| LR warmup + cosine decay scheduling | +1-3 pp | None | Very low | High |
+| Intelligent 3-to-5 label remapping (VADER/weak supervision) | +3-6 pp | Low | Medium | High |
+| Collapse to 3 classes (for production use) | +12-15 pp | None | Very low | High* |
+| SMOTE + data augmentation (EDA/NLPAUG) | +2-4 pp | Low | Medium | Medium |
+| Replace DistilBERT with RoBERTa-Base | +3-6 pp | Medium | Low | Medium |
+| Domain-adversarial training (DANN) | +3-5 pp | Medium | Medium | Medium |
+| DistilBERT + BiLSTM hybrid architecture | +3-5 pp | Medium | Medium | Medium |
+| LoRA/adapters for larger models | +1-3 pp | Low | Medium | Medium |
+| Weighted ensemble (transformer + classical) | +4-7 pp | High | Medium-High | Low |
+| Domain-adaptive pretraining (DAPT) | +2-5 pp | High | Medium | Low |
+| Additional data collection + active learning | +3-8 pp | High | High | Low |
+
+> \* Collapsing to 3 classes (Negative / Neutral / Positive) does not improve the 5-class model itself but dramatically increases reported accuracy for production applications where fine granularity is not required.
+
+**Cumulative projection:** Applying the top-priority improvements (early stopping, LR scheduling, label remapping, RoBERTa-Base) is estimated to push accuracy from ~62.5% to ~68-72%. A fully optimized pipeline (RoBERTa-Large with DAPT and ensemble) could approach ~70-75% on 5 classes [[1, 2, 6]](#references).
+
+### Phase 1: Quick Wins (Low Cost, High Impact)
+
+**Extended training with early stopping.** The current 3-epoch training likely underfit the data. Extending to 6-8 epochs with early stopping (patience=2-3) and periodic validation evaluation allows the model to converge properly while preventing overfitting. Cheang et al. (2020) find that transformers for fine-grained classification typically require more training iterations [[1]](#references).
+
+**Learning rate scheduling.** Adding linear warmup (10% of total steps) followed by cosine or linear decay stabilizes early training and improves final convergence. This is a zero-cost change (hyperparameter only) with consistent gains reported across transformer fine-tuning literature [[7]](#references).
+
+**Smarter 3-to-5 label mapping.** The current word-count-based heuristic introduces label noise -- a long negative tweet is not necessarily "very negative." Replacing it with lexicon-based scoring (e.g., VADER compound scores for intensity) or using a pre-trained 5-star model (e.g., `nlptown/bert-base-multilingual-uncased-sentiment`) for weak supervision would significantly reduce noise in the synthetic labels [[8]](#references).
+
+### Phase 2: Model Upgrades
+
+**RoBERTa-Base over DistilBERT.** RoBERTa-Base (125M parameters) consistently outperforms DistilBERT in classification tasks, with ~3-6 points of accuracy gain at approximately 2x training cost. The code change is minimal -- only the model identifier needs updating [[1]](#references).
+
+**Domain-specialized models.** For the financial news domain, FinBERT (a BERT model pre-trained on financial corpora) substantially outperforms generic BERT on financial sentiment tasks [[4]](#references). A multi-head approach using domain-specific encoders could improve per-domain performance.
+
+**Hybrid architecture (Transformer + BiLSTM).** Nkhata et al. (2025) demonstrate that adding a BiLSTM layer on top of BERT representations captures fine-grained sequential dependencies, achieving +3-5 points over BERT alone on SST-5 [[2]](#references).
+
+### Phase 3: Advanced Techniques
+
+**Domain-adversarial training.** Inspired by SentXFormer (Kumar et al., 2025), adding a gradient reversal layer with a domain classifier forces the model to learn domain-invariant features. This approach has achieved 91-93% accuracy in cross-domain transfer experiments on review datasets [[3]](#references).
+
+**Domain-adaptive pretraining (DAPT).** Continuing masked language model training on unlabeled in-domain text (Yelp reviews, tweets, financial articles) before fine-tuning consistently improves downstream performance. Gururangan et al. (2020) show that this intermediate step yields "considerable performance gains" across classification tasks [[6]](#references).
+
+**Data augmentation and class balancing.** SMOTE for minority class oversampling and text augmentation techniques (synonym replacement, EDA, back-translation) improve generalization on underrepresented classes. Nkhata et al. (2025) advocate for NLPAUG and SMOTE as effective strategies for fine-grained multi-class setups [[2]](#references).
+
+**Weighted ensemble.** Combining transformer predictions with classical model outputs (e.g., 0.6 DistilBERT + 0.2 SVM + 0.2 XGBoost) exploits complementary strengths -- transformers capture contextual nuance while TF-IDF models handle keyword-heavy short texts. Optimizing weights on a validation set via Nelder-Mead can yield +4-7 points [[5]](#references).
+
+### Recommended Training Configurations
+
+| Config | Model | Epochs | Batch | LR | Expected Accuracy |
+|:------:|-------|:------:|:-----:|:--:|:-----------------:|
+| A (quick) | DistilBERT + early stopping | 8-10 | 32 | 2e-5 | ~64-66% |
+| B (balanced) | RoBERTa-Base + warmup | 6-8 | 16 | 1e-5 | ~65-68% |
+| C (maximum) | RoBERTa-Large + DAPT | 5-6 | 8 | 5e-6 | ~68-72% |
+| D (efficient) | RoBERTa-Large + LoRA | 6 | 16 | 2e-5 | ~67-70% |
+
+### Success Criteria
+
+| Metric | Current Baseline | Short-term Target | Final Target |
+|--------|:----------------:|:-----------------:|:------------:|
+| Accuracy (5-class) | 62.5% | > 65% | > 70% |
+| F1 Macro | 0.607 | > 0.625 | > 0.660 |
+| F1 Neutral class | ~0.56 | > 0.58 | > 0.62 |
+| F1 Extremes (Very Pos/Neg) | ~0.73 | > 0.75 | > 0.80 |
+
+Each improvement should be validated with statistical significance testing (e.g., McNemar's test) to ensure gains are not attributable to noise.
+
+---
+
+## References
+
+1. Cheang, B. et al. (2020). *Language Representation Models for Fine-Grained Sentiment Classification.* arXiv. -- Benchmarks DistilBERT (~53.2%), BERT-Base (~54.9%), and RoBERTa-Large (~60.2%) on SST-5.
+
+2. Nkhata, G. et al. (2025). *Fine-tuning BERT with Bidirectional LSTM for Fine-grained Movie Reviews Sentiment Analysis.* IJASM, 16(3-4). -- Achieves 59.48% on SST-5 with BERT-BiLSTM hybrid; advocates SMOTE and NLPAUG for class balancing.
+
+3. Kumar, A. et al. (2025). *SentXFormer: A Transformer-Enhanced Hybrid Model for Cross-Domain Sentiment Analysis.* Scientific Reports. -- Combines BERT/RoBERTa with adversarial domain adaptation, achieving 91-93% on cross-domain review datasets.
+
+4. Zeng, Q. & Jiang, T. (2023). *Financial Sentiment Analysis using FinBERT.* arXiv. -- Demonstrates that domain-specialized FinBERT substantially outperforms generic BERT on financial sentiment tasks.
+
+5. Wei, J. et al. (2025). *Exploring Transformer Models for Sentiment Classification.* Expert Systems with Applications. -- Comparative study of BERT, RoBERTa, ALBERT, and combinatorial fusion strategies.
+
+6. Gururangan, S. et al. (2020). *Don't Stop Pretraining: Adapt Language Models to Domains and Tasks.* ACL 2020. -- Shows that domain-adaptive pretraining (DAPT) yields consistent performance gains across classification tasks.
+
+7. Gandhi, J.N. et al. (2024). *Efficient Sentiment Classification using DistilBERT.* Proceedings ICSICE 2024. -- Documents DistilBERT training strategies including layer freezing and learning rate scheduling.
+
+8. Abei, F. et al. (2025). *Sentiment Analysis on Short Social Media Texts Using DistilBERT.* J. of Computer Networks, Architecture & HPC. -- Analyzes DistilBERT performance on short-form social media text.
 
 ---
 
